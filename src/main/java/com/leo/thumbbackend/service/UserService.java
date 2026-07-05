@@ -2,6 +2,9 @@ package com.leo.thumbbackend.service;
 
 import com.leo.thumbbackend.model.entity.User;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.leo.thumbbackend.model.dto.user.UserLoginRequest;
+import com.leo.thumbbackend.model.dto.user.UserRegisterRequest;
+import com.leo.thumbbackend.model.vo.UserVO;
 import jakarta.servlet.http.HttpServletRequest;
 
 /**
@@ -11,5 +14,13 @@ import jakarta.servlet.http.HttpServletRequest;
 */
 public interface UserService extends IService<User> {
 
+    long userRegister(UserRegisterRequest registerRequest);
+
+    UserVO userLogin(UserLoginRequest loginRequest, HttpServletRequest request);
+
+    boolean userLogout(HttpServletRequest request);
+
     User getLoginUser(HttpServletRequest request);
+
+    UserVO getLoginUserVO(HttpServletRequest request);
 }

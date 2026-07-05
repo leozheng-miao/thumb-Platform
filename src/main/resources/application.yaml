@@ -9,6 +9,12 @@ spring:
     url: jdbc:mysql://localhost:3306/thumb_db
     username: root
     password: clx740329
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 3s
 knife4j:
   enable: true
   setting:

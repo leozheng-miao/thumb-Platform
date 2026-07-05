@@ -1,5 +1,6 @@
 package com.leo.thumbbackend.controller;
 
+import com.leo.thumbbackend.annotation.AuthCheck;
 import com.leo.thumbbackend.common.BaseResponse;
 import com.leo.thumbbackend.common.ResultUtils;
 import com.leo.thumbbackend.model.dto.blog.BlogAddRequest;
@@ -40,6 +41,7 @@ public class BlogController {
      * 创建博客
      */
     @PostMapping("/add")
+    @AuthCheck
     public BaseResponse<Long> addBlog(@RequestBody BlogAddRequest blogAddRequest,
                                       HttpServletRequest request) {
         Long blogId = blogService.addBlog(blogAddRequest, request);
@@ -50,6 +52,7 @@ public class BlogController {
      * 修改博客
      */
     @PostMapping("/update")
+    @AuthCheck
     public BaseResponse<Boolean> updateBlog(@RequestBody BlogUpdateRequest blogUpdateRequest,
                                             HttpServletRequest request) {
         Boolean result = blogService.updateBlog(blogUpdateRequest, request);
@@ -60,6 +63,7 @@ public class BlogController {
      * 删除博客
      */
     @PostMapping("/delete")
+    @AuthCheck
     public BaseResponse<Boolean> deleteBlog(long blogId, HttpServletRequest request) {
         Boolean result = blogService.deleteBlog(blogId, request);
         return ResultUtils.success(result);

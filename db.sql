@@ -1,11 +1,14 @@
 create database thumb_db;
 use thumb_db;
-
+drop table user
 -- 用户表
 create table if not exists user
 (
-    id       bigint auto_increment primary key,
-    username varchar(128) not null
+    id           bigint auto_increment primary key,
+    userAccount  varchar(32)  not null comment '登录账号',
+    userPassword varchar(255) not null comment '加密密码',
+    isDelete     tinyint      default 0 not null comment '是否删除：0-否，1-是',
+    constraint uk_userAccount unique (userAccount)
 );
 
 -- 博客表
