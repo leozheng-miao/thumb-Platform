@@ -112,9 +112,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return null;
         }
         Object loginUserId = session.getAttribute(UserConstant.LOGIN_USER);
-        if (!(loginUserId instanceof Long userId)) {
+        if (!(loginUserId instanceof Number number)) {
             return null;
         }
+        Long userId = number.longValue();
         return baseMapper.selectById(userId);
     }
 

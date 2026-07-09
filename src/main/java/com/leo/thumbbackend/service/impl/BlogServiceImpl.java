@@ -193,11 +193,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
             return blogVO;
         }
 
-        Thumb thumb = thumbService.lambdaQuery()
-                .eq(Thumb::getUserId, loginUser.getId())
-                .eq(Thumb::getBlogId, blog.getId())
-                .one();
-        blogVO.setHasThumb(thumb != null);
+        blogVO.setHasThumb(thumbService.hasThumb(blog.getId(), loginUser.getId()));
 
         return blogVO;
     }
@@ -207,20 +203,16 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
         User loginUser = userService.getLoginUser(request);
         Map<Long, Boolean> blogIdHasThumbMap = new HashMap<>();
         if (ObjUtil.isNotEmpty(loginUser)) {
-            Set<Long> blogIdSet = blogList.stream().map(Blog::getId).collect(Collectors.toSet());
-            // 获取点赞
-            List<Thumb> thumbList = thumbService.lambdaQuery()
-                    .eq(Thumb::getUserId, loginUser.getId())
-                    .in(Thumb::getBlogId, blogIdSet)
-                    .list();
-
-            thumbList.forEach(blogThumb -> blogIdHasThumbMap.put(blogThumb.getBlogId(), true));
+            Long loginUserId = loginUser.getId();
+            blogIdHasThumbMap = blogList.stream()
+                    .collect(Collectors.toMap(Blog::getId, blog -> thumbService.hasThumb(blog.getId(), loginUserId)));
         }
 
+        Map<Long, Boolean> finalBlogIdHasThumbMap = blogIdHasThumbMap;
         return blogList.stream()
                 .map(blog -> {
                     BlogVO blogVO = BeanUtil.copyProperties(blog, BlogVO.class);
-                    blogVO.setHasThumb(blogIdHasThumbMap.get(blog.getId()));
+                    blogVO.setHasThumb(finalBlogIdHasThumbMap.get(blog.getId()));
                     return blogVO;
                 })
                 .toList();

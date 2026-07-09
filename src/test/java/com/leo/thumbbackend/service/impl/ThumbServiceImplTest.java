@@ -15,16 +15,20 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.Serializable;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -37,6 +41,8 @@ class ThumbServiceImplTest {
     private UserService userService;
     private TransactionTemplate transactionTemplate;
     private RedissonClient redissonClient;
+    private RedisTemplate<String, Object> redisTemplate;
+    private HashOperations<String, Object, Object> hashOperations;
     private RLock lock;
     private HttpServletRequest request;
     private ThumbServiceImpl thumbService;
@@ -48,6 +54,8 @@ class ThumbServiceImplTest {
         userService = mock(UserService.class);
         transactionTemplate = mock(TransactionTemplate.class);
         redissonClient = mock(RedissonClient.class);
+        redisTemplate = mock(RedisTemplate.class);
+        hashOperations = mock(HashOperations.class);
         lock = mock(RLock.class);
         request = mock(HttpServletRequest.class);
         thumbService = new ThumbServiceImpl(
@@ -55,7 +63,8 @@ class ThumbServiceImplTest {
                 blogMapper,
                 userService,
                 transactionTemplate,
-                redissonClient
+                redissonClient,
+                redisTemplate
         );
 
         User user = new User();
@@ -63,9 +72,11 @@ class ThumbServiceImplTest {
         when(userService.getLoginUser(request)).thenReturn(user);
         when(redissonClient.getLock("thumb:lock:1:2")).thenReturn(lock);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.expire(eq("thumb:1"), any(Duration.class))).thenReturn(true);
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
-            TransactionCallback<Boolean> callback = invocation.getArgument(0);
+            TransactionCallback<Object> callback = invocation.getArgument(0);
             return callback.doInTransaction(mock(TransactionStatus.class));
         });
     }
@@ -87,9 +98,14 @@ class ThumbServiceImplTest {
     @Test
     void doThumbUsesUserAndBlogScopedLockAndReleasesIt() {
         when(lock.tryLock()).thenReturn(true);
+        when(hashOperations.get("thumb:1", "2")).thenReturn(null);
         when(thumbMapper.selectCount(any(Wrapper.class))).thenReturn(0L);
         when(blogMapper.update(any(), any(Wrapper.class))).thenReturn(1);
-        when(thumbMapper.insert(any(Thumb.class))).thenReturn(1);
+        when(thumbMapper.insert(any(Thumb.class))).thenAnswer(invocation -> {
+            Thumb thumb = invocation.getArgument(0);
+            thumb.setId(20L);
+            return 1;
+        });
 
         assertTrue(thumbService.doThumb(request(2L), request));
 
@@ -98,12 +114,15 @@ class ThumbServiceImplTest {
         verify(thumbMapper).insert(thumbCaptor.capture());
         assertEquals(1L, thumbCaptor.getValue().getUserId());
         assertEquals(2L, thumbCaptor.getValue().getBlogId());
+        verify(hashOperations).put("thumb:1", "2", 20L);
+        verify(redisTemplate).expire(eq("thumb:1"), any(Duration.class));
         verify(lock).unlock();
     }
 
     @Test
     void doThumbThrowsWhenThumbRecordCannotBeSaved() {
         when(lock.tryLock()).thenReturn(true);
+        when(hashOperations.get("thumb:1", "2")).thenReturn(null);
         when(thumbMapper.selectCount(any(Wrapper.class))).thenReturn(0L);
         when(blogMapper.update(any(), any(Wrapper.class))).thenReturn(1);
         when(thumbMapper.insert(any(Thumb.class))).thenReturn(0);
@@ -131,12 +150,14 @@ class ThumbServiceImplTest {
         assertTrue(thumbService.undoThumb(request(2L), request));
 
         verify(thumbMapper).deleteById(10L);
+        verify(hashOperations).delete("thumb:1", "2");
         verify(lock).unlock();
     }
 
     @Test
     void blogUpdateFailureDoesNotWriteThumbRecord() {
         when(lock.tryLock()).thenReturn(true);
+        when(hashOperations.get("thumb:1", "2")).thenReturn(null);
         when(thumbMapper.selectCount(any(Wrapper.class))).thenReturn(0L);
         when(blogMapper.update(any(), any(Wrapper.class))).thenReturn(0);
 
@@ -148,6 +169,30 @@ class ThumbServiceImplTest {
         assertEquals(ErrorCode.NOT_FOUND_ERROR.getCode(), exception.getCode());
         verify(thumbMapper, never()).insert(any(Thumb.class));
         verify(lock).unlock();
+    }
+
+    @Test
+    void hasThumbReturnsTrueWhenRedisCacheHitWithoutQueryingDatabase() {
+        when(hashOperations.get("thumb:1", "2")).thenReturn(20L);
+
+        assertTrue(thumbService.hasThumb(2L, 1L));
+
+        verify(thumbMapper, never()).selectOne(any(Wrapper.class));
+    }
+
+    @Test
+    void hasThumbLoadsFromDatabaseAndWritesCacheWhenRedisMiss() {
+        Thumb thumb = new Thumb();
+        thumb.setId(20L);
+        thumb.setUserId(1L);
+        thumb.setBlogId(2L);
+        when(hashOperations.get("thumb:1", "2")).thenReturn(null);
+        when(thumbMapper.selectOne(any(Wrapper.class))).thenReturn(thumb);
+
+        assertTrue(thumbService.hasThumb(2L, 1L));
+
+        verify(hashOperations).put("thumb:1", "2", 20L);
+        verify(redisTemplate).expire(eq("thumb:1"), any(Duration.class));
     }
 
     private DoThumbRequest request(long blogId) {

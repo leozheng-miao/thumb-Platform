@@ -3,6 +3,7 @@ package com.leo.thumbbackend.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.leo.thumbbackend.constant.ThumbConstant;
 import com.leo.thumbbackend.exception.BusinessException;
 import com.leo.thumbbackend.exception.ErrorCode;
 import com.leo.thumbbackend.mapper.BlogMapper;
@@ -16,58 +17,79 @@ import com.leo.thumbbackend.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.util.function.Supplier;
 
 @Service
 public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements ThumbService {
 
-    private static final String LOCK_KEY_PREFIX = "thumb:lock:";
-
     private final BlogMapper blogMapper;
     private final UserService userService;
     private final TransactionTemplate transactionTemplate;
     private final RedissonClient redissonClient;
+    private final RedisTemplate<String, Object> redisTemplate;
+
 
     public ThumbServiceImpl(ThumbMapper thumbMapper,
                             BlogMapper blogMapper,
                             UserService userService,
                             TransactionTemplate transactionTemplate,
-                            RedissonClient redissonClient) {
+                            RedissonClient redissonClient,
+                            RedisTemplate<String, Object> redisTemplate) {
         this.baseMapper = thumbMapper;
         this.blogMapper = blogMapper;
         this.userService = userService;
         this.transactionTemplate = transactionTemplate;
         this.redissonClient = redissonClient;
+        this.redisTemplate = redisTemplate;
     }
 
     @Override
     public Boolean doThumb(DoThumbRequest doThumbRequest, HttpServletRequest request) {
         Long blogId = validateAndGetBlogId(doThumbRequest);
         User loginUser = getLoginUser(request);
-        return executeWithLock(loginUser.getId(), blogId, () -> doThumbInTransaction(loginUser.getId(), blogId));
+        return executeWithLock(loginUser.getId(), blogId, () -> doThumbWithCache(loginUser.getId(), blogId));
     }
 
     @Override
     public Boolean undoThumb(DoThumbRequest doThumbRequest, HttpServletRequest request) {
         Long blogId = validateAndGetBlogId(doThumbRequest);
         User loginUser = getLoginUser(request);
-        return executeWithLock(loginUser.getId(), blogId, () -> undoThumbInTransaction(loginUser.getId(), blogId));
+        return executeWithLock(loginUser.getId(), blogId, () -> undoThumbWithCache(loginUser.getId(), blogId));
     }
 
-    private Boolean doThumbInTransaction(Long userId, Long blogId) {
-        return transactionTemplate.execute(status -> {
-            Long thumbCount = baseMapper.selectCount(
-                    new LambdaQueryWrapper<Thumb>()
-                            .eq(Thumb::getUserId, userId)
-                            .eq(Thumb::getBlogId, blogId)
-            );
-            if (thumbCount != null && thumbCount > 0) {
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户已点赞");
-            }
+    @Override
+    public Boolean hasThumb(Long blogId, Long userId) {
+        if (blogId == null || userId == null || blogId <= 0 || userId <= 0) {
+            return false;
+        }
+        Long cachedThumbId = getCachedThumbId(userId, blogId);
+        if (cachedThumbId != null) {
+            return true;
+        }
+        Thumb thumb = getThumbFromDb(userId, blogId);
+        if (thumb == null) {
+            return false;
+        }
+        saveThumbCache(userId, blogId, thumb.getId());
+        return true;
+    }
 
+    private Boolean doThumbWithCache(Long userId, Long blogId) {
+        if (Boolean.TRUE.equals(hasThumb(blogId, userId))) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户已点赞");
+        }
+        ThumbResult thumbResult = doThumbInTransaction(userId, blogId);
+        saveThumbCache(userId, blogId, thumbResult.thumbId());
+        return true;
+    }
+
+    private ThumbResult doThumbInTransaction(Long userId, Long blogId) {
+        return transactionTemplate.execute(status -> {
             int updatedRows = blogMapper.update(
                     null,
                     new LambdaUpdateWrapper<Blog>()
@@ -84,21 +106,22 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
             if (baseMapper.insert(thumb) != 1) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "点赞失败");
             }
-            return true;
+            return new ThumbResult(thumb.getId());
         });
     }
 
-    private Boolean undoThumbInTransaction(Long userId, Long blogId) {
-        return transactionTemplate.execute(status -> {
-            Thumb thumb = baseMapper.selectOne(
-                    new LambdaQueryWrapper<Thumb>()
-                            .eq(Thumb::getUserId, userId)
-                            .eq(Thumb::getBlogId, blogId)
-            );
-            if (thumb == null) {
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户未点赞");
-            }
+    private Boolean undoThumbWithCache(Long userId, Long blogId) {
+        Thumb thumb = getThumbFromDb(userId, blogId);
+        if (thumb == null) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户未点赞");
+        }
+        undoThumbInTransaction(thumb.getId(), blogId);
+        deleteThumbCache(userId, blogId);
+        return true;
+    }
 
+    private Boolean undoThumbInTransaction(Long thumbId, Long blogId) {
+        return transactionTemplate.execute(status -> {
             int updatedRows = blogMapper.update(
                     null,
                     new LambdaUpdateWrapper<Blog>()
@@ -110,7 +133,7 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "取消点赞失败");
             }
 
-            if (baseMapper.deleteById(thumb.getId()) != 1) {
+            if (baseMapper.deleteById(thumbId) != 1) {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "取消点赞失败");
             }
             return true;
@@ -118,7 +141,7 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
     }
 
     private Boolean executeWithLock(Long userId, Long blogId, Supplier<Boolean> operation) {
-        RLock lock = redissonClient.getLock(LOCK_KEY_PREFIX + userId + ":" + blogId);
+        RLock lock = redissonClient.getLock(getThumbLockKey(userId, blogId));
         if (!lock.tryLock()) {
             throw new BusinessException(ErrorCode.TOO_MANY_REQUEST, "操作频繁");
         }
@@ -150,5 +173,48 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
         }
         return loginUser;
+    }
+
+    private Thumb getThumbFromDb(Long userId, Long blogId) {
+        return baseMapper.selectOne(
+                new LambdaQueryWrapper<Thumb>()
+                        .eq(Thumb::getUserId, userId)
+                        .eq(Thumb::getBlogId, blogId)
+        );
+    }
+
+    private Long getCachedThumbId(Long userId, Long blogId) {
+        Object value = redisTemplate.opsForHash().get(getUserThumbKey(userId), blogId.toString());
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return Long.valueOf(value.toString());
+    }
+
+    private void saveThumbCache(Long userId, Long blogId, Long thumbId) {
+        if (thumbId == null) {
+            return;
+        }
+        String userThumbKey = getUserThumbKey(userId);
+        redisTemplate.opsForHash().put(userThumbKey, blogId.toString(), thumbId);
+        redisTemplate.expire(userThumbKey, Duration.ofDays(ThumbConstant.USER_THUMB_CACHE_TTL_DAYS));
+    }
+
+    private void deleteThumbCache(Long userId, Long blogId) {
+        redisTemplate.opsForHash().delete(getUserThumbKey(userId), blogId.toString());
+    }
+
+    private String getUserThumbKey(Long userId) {
+        return ThumbConstant.USER_THUMB_KEY_PREFIX + userId;
+    }
+
+    private String getThumbLockKey(Long userId, Long blogId) {
+        return ThumbConstant.USER_THUMB_LOCK_KEY_PREFIX + userId + ":" + blogId;
+    }
+
+    private record ThumbResult(Long thumbId) {
     }
 }

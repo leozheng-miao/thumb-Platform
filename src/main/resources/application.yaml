@@ -13,7 +13,8 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      timeout: 3s
+      timeout: 5000
+      database: 0
 knife4j:
   enable: true
   setting:

@@ -171,6 +171,16 @@ class UserServiceImplTest {
         assertEquals("test_user", userService.getLoginUserVO(request).getUserAccount());
     }
 
+    @Test
+    void getLoginUserAcceptsNumericSessionUserId() {
+        User user = user();
+        when(request.getSession(false)).thenReturn(session);
+        when(session.getAttribute(UserConstant.LOGIN_USER)).thenReturn(1);
+        when(userMapper.selectById(1L)).thenReturn(user);
+
+        assertEquals(user, userService.getLoginUser(request));
+    }
+
     private UserRegisterRequest registerRequest() {
         UserRegisterRequest request = new UserRegisterRequest();
         request.setUserAccount("test_user");
