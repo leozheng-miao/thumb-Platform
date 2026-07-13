@@ -16,10 +16,15 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 定时将 Redis 中的临时点赞数据同步到数据库  
@@ -62,21 +67,45 @@ public class SyncThumb2DBJob {
         boolean thumbMapEmpty = CollUtil.isEmpty(allTempThumbMap);  
   
         // 同步 点赞 到数据库  
-        // 构建插入列表并收集blogId  
-        Map<Long, Long> blogThumbCountMap = new HashMap<>();  
+        // 构建插入列表并收集blogId  <Key, Value> 分别为 <BlogId, 点赞数增量(可为负数)>
+        Map<Long, Long> blogThumbCountMap = new HashMap<>();
         if (thumbMapEmpty) {  
             return;  
         }  
+        List<TempThumbRecord> tempThumbRecords = new ArrayList<>();
+        Set<Long> blogIds = new HashSet<>();
+        for (Map.Entry<Object, Object> entry : allTempThumbMap.entrySet()) {
+            String userIdBlogId = entry.getKey().toString();
+            String[] userIdAndBlogId = userIdBlogId.split(StrPool.COLON);
+            if (userIdAndBlogId.length != 2) {
+                log.warn("临时点赞记录 key 异常：{}", userIdBlogId);
+                continue;
+            }
+            Long userId = Long.valueOf(userIdAndBlogId[0]);
+            Long blogId = Long.valueOf(userIdAndBlogId[1]);
+            Integer thumbType = Integer.valueOf(entry.getValue().toString());
+            tempThumbRecords.add(new TempThumbRecord(userId, blogId, thumbType));
+            blogIds.add(blogId);
+        }
+        if (tempThumbRecords.isEmpty()) {
+            return;
+        }
+
+        // 批量查询博客是否存在
+        Set<Long> existingBlogIds = new HashSet<>(blogMapper.listExistingBlogIds(blogIds));
         ArrayList<Thumb> thumbList = new ArrayList<>();  
         LambdaQueryWrapper<Thumb> wrapper = new LambdaQueryWrapper<>();  
         boolean needRemove = false;  
-        for (Object userIdBlogIdObj : allTempThumbMap.keySet()) {  
-            String userIdBlogId = (String) userIdBlogIdObj;  
-            String[] userIdAndBlogId = userIdBlogId.split(StrPool.COLON);  
-            Long userId = Long.valueOf(userIdAndBlogId[0]);  
-            Long blogId = Long.valueOf(userIdAndBlogId[1]);  
+        for (TempThumbRecord tempThumbRecord : tempThumbRecords) {  
+            Long userId = tempThumbRecord.userId();  
+            Long blogId = tempThumbRecord.blogId();
             // -1 取消点赞，1 点赞  
-            Integer thumbType = Integer.valueOf(allTempThumbMap.get(userIdBlogId).toString());  
+            Integer thumbType = tempThumbRecord.thumbType();
+            if (!existingBlogIds.contains(blogId)) {
+                log.warn("博客不存在，跳过临时点赞同步：userId={}, blogId={}, thumbType={}", userId, blogId, thumbType);
+                redisTemplate.opsForHash().delete(RedisKeyUtil.getUserThumbKey(userId), blogId.toString());
+                continue;
+            }
             if (thumbType == ThumbTypeEnum.INCR.getValue()) {  
                 Thumb thumb = new Thumb();  
                 thumb.setUserId(userId);  
@@ -96,7 +125,9 @@ public class SyncThumb2DBJob {
             blogThumbCountMap.put(blogId, blogThumbCountMap.getOrDefault(blogId, 0L) + thumbType);  
         }  
         // 批量插入  
-        thumbService.saveBatch(thumbList);  
+        if (!thumbList.isEmpty()) {
+            thumbService.saveBatch(thumbList);
+        }
         // 批量删除  
         if (needRemove) {  
             thumbService.remove(wrapper);  
@@ -106,8 +137,32 @@ public class SyncThumb2DBJob {
             blogMapper.batchUpdateThumbCount(blogThumbCountMap);  
         }  
         // 异步删除  
-        Thread.startVirtualThread(() -> {  
-            redisTemplate.delete(tempThumbKey);  
-        });  
-    }  
-}
+        deleteTempKeyAfterCommit(tempThumbKey);
+    }
+    private void deleteTempKeyAfterCommit(String tempThumbKey) {
+        Runnable deleteTask = () -> {
+            try {
+                redisTemplate.delete(tempThumbKey);
+            } catch (RuntimeException e) {
+                log.error("删除临时点赞数据失败，key={}", tempThumbKey, e);
+            }
+        };
+
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            deleteTask.run();
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        deleteTask.run();
+                    }
+                }
+        );
+    }
+
+    private record TempThumbRecord(Long userId, Long blogId, Integer thumbType) {
+    }
+}  

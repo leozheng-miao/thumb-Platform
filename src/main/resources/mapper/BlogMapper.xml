@@ -31,4 +31,19 @@
             #{id}
         </foreach>
     </update>
+    <select id="listBlogIdsAfterId" resultType="java.lang.Long">
+        SELECT id
+        FROM blog
+        WHERE id &gt; #{lastId}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+    <select id="listExistingBlogIds" resultType="java.lang.Long">
+        SELECT id
+        FROM blog
+        WHERE id IN
+        <foreach collection="blogIds" item="blogId" open="(" separator="," close=")">
+            #{blogId}
+        </foreach>
+    </select>
 </mapper>

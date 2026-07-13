@@ -36,14 +36,18 @@ public class ThumbServiceRedisImpl extends ServiceImpl<ThumbMapper, Thumb> imple
         User loginUser = getLoginUser(request);
         Long result = stringRedisTemplate.execute(
                 RedisLuaScriptConstant.THUMB_SCRIPT,
-                List.of(getTempThumbKey(), RedisKeyUtil.getUserThumbKey(loginUser.getId())),
+                List.of(getTempThumbKey(), RedisKeyUtil.getUserThumbKey(loginUser.getId()), RedisKeyUtil.getBlogExistsKey()),
                 loginUser.getId().toString(),
                 blogId.toString()
         );
-        if (LuaStatusEnum.FAIL.getValue() == getLuaResult(result)) {
+        long luaResult = getLuaResult(result);
+        if (LuaStatusEnum.BLOG_NOT_EXIST.getValue() == luaResult) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "博客不存在");
+        }
+        if (LuaStatusEnum.FAIL.getValue() == luaResult) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户已点赞");
         }
-        return LuaStatusEnum.SUCCESS.getValue() == getLuaResult(result);
+        return LuaStatusEnum.SUCCESS.getValue() == luaResult;
     }
 
     @Override
@@ -52,14 +56,18 @@ public class ThumbServiceRedisImpl extends ServiceImpl<ThumbMapper, Thumb> imple
         User loginUser = getLoginUser(request);
         Long result = stringRedisTemplate.execute(
                 RedisLuaScriptConstant.UNTHUMB_SCRIPT,
-                List.of(getTempThumbKey(), RedisKeyUtil.getUserThumbKey(loginUser.getId())),
+                List.of(getTempThumbKey(), RedisKeyUtil.getUserThumbKey(loginUser.getId()), RedisKeyUtil.getBlogExistsKey()),
                 loginUser.getId().toString(),
                 blogId.toString()
         );
-        if (LuaStatusEnum.FAIL.getValue() == getLuaResult(result)) {
+        long luaResult = getLuaResult(result);
+        if (LuaStatusEnum.BLOG_NOT_EXIST.getValue() == luaResult) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "博客不存在");
+        }
+        if (LuaStatusEnum.FAIL.getValue() == luaResult) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户未点赞");
         }
-        return LuaStatusEnum.SUCCESS.getValue() == getLuaResult(result);
+        return LuaStatusEnum.SUCCESS.getValue() == luaResult;
     }
 
     @Override

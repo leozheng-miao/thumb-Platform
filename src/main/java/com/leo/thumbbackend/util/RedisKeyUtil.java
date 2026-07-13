@@ -18,5 +18,13 @@ public class RedisKeyUtil {
     public static String getThumbLockKey(Long userId, Long blogId) {
         return ThumbConstant.USER_THUMB_LOCK_KEY_PREFIX + userId + ":" + blogId;
     }
+
+    public static String getBlogExistsKey() {
+        return ThumbConstant.BLOG_EXISTS_KEY;
+    }
+
+    public static String getBlogExistsInitKey(String initId) {
+        return ThumbConstant.BLOG_EXISTS_INIT_KEY_PREFIX.formatted(initId);
+    }
   
 }

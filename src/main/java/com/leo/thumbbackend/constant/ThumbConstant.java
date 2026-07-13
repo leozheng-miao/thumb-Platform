@@ -10,4 +10,8 @@ public interface ThumbConstant {
 
     String TEMP_THUMB_KEY_PREFIX = "thumb:temp:%s";
 
+    String BLOG_EXISTS_KEY = "blog:exists";
+
+    String BLOG_EXISTS_INIT_KEY_PREFIX = "blog:exists:init:%s";
+
 }

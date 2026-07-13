@@ -15,11 +15,16 @@ import com.leo.thumbbackend.service.BlogService;
 import com.leo.thumbbackend.mapper.BlogMapper;
 import com.leo.thumbbackend.service.ThumbService;
 import com.leo.thumbbackend.service.UserService;
+import com.leo.thumbbackend.util.RedisKeyUtil;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.HashMap;
 import java.util.List;
@@ -30,9 +35,10 @@ import java.util.stream.Collectors;
 /**
 * @author zhengsmacbook
 * @description 针对表【blog】的数据库操作Service实现
-* @createDate 2026-07-05 18:21:27
+ * @createDate 2026-07-05 18:21:27
 */
 @Service
+@Slf4j
 public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
     implements BlogService{
     @Resource
@@ -42,6 +48,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
     @Lazy
     private ThumbService thumbService;
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
     @Override
     public BlogVO getBlogVOById(long blogId, HttpServletRequest request) {
         Blog blog = this.getById(blogId);
@@ -50,6 +59,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Long addBlog(BlogAddRequest blogAddRequest, HttpServletRequest request) {
         if (blogAddRequest == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
@@ -88,6 +98,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
             throw new BusinessException(ErrorCode.OPERATION_ERROR);
         }
 
+        syncBlogExistsAfterCommit(blog.getId(), true);
         return blog.getId();
     }
 
@@ -182,6 +193,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
                 .eq(Thumb::getBlogId, blogId)
                 .remove();
 
+        syncBlogExistsAfterCommit(blogId, false);
         return true;
     }
 
@@ -218,5 +230,28 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog>
                 .toList();
     }
 
+    private void syncBlogExistsAfterCommit(Long blogId, boolean exists) {
+        Runnable syncTask = () -> {
+            try {
+                if (exists) {
+                    stringRedisTemplate.opsForSet().add(RedisKeyUtil.getBlogExistsKey(), blogId.toString());
+                } else {
+                    stringRedisTemplate.opsForSet().remove(RedisKeyUtil.getBlogExistsKey(), blogId.toString());
+                }
+            } catch (RuntimeException e) {
+                log.error("同步博客存在性到 Redis 失败，blogId={}, exists={}", blogId, exists, e);
+            }
+        };
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            syncTask.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                syncTask.run();
+            }
+        });
+    }
 
 }
