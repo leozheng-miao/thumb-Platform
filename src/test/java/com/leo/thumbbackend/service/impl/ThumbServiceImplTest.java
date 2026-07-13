@@ -17,6 +17,7 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -59,13 +60,13 @@ class ThumbServiceImplTest {
         lock = mock(RLock.class);
         request = mock(HttpServletRequest.class);
         thumbService = new ThumbServiceImpl(
-                thumbMapper,
                 blogMapper,
                 userService,
                 transactionTemplate,
                 redissonClient,
                 redisTemplate
         );
+        ReflectionTestUtils.setField(thumbService, "baseMapper", thumbMapper);
 
         User user = new User();
         user.setId(1L);

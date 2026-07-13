@@ -8,4 +8,6 @@ public interface ThumbConstant {
 
     long USER_THUMB_CACHE_TTL_DAYS = 7L;
 
+    String TEMP_THUMB_KEY_PREFIX = "thumb:temp:%s";
+
 }

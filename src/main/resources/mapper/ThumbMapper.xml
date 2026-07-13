@@ -2,7 +2,7 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="generator.mapper.ThumbMapper">
+<mapper namespace="com.leo.thumbbackend.mapper.ThumbMapper">
 
     <resultMap id="BaseResultMap" type="com.leo.thumbbackend.model.entity.Thumb">
             <id property="id" column="id" />

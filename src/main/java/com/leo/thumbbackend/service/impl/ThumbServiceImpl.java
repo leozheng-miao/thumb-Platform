@@ -14,7 +14,10 @@ import com.leo.thumbbackend.model.entity.Thumb;
 import com.leo.thumbbackend.model.entity.User;
 import com.leo.thumbbackend.service.ThumbService;
 import com.leo.thumbbackend.service.UserService;
+import com.leo.thumbbackend.util.RedisKeyUtil;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -25,6 +28,8 @@ import java.time.Duration;
 import java.util.function.Supplier;
 
 @Service
+@Slf4j
+@RequiredArgsConstructor
 public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements ThumbService {
 
     private final BlogMapper blogMapper;
@@ -32,21 +37,6 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
     private final TransactionTemplate transactionTemplate;
     private final RedissonClient redissonClient;
     private final RedisTemplate<String, Object> redisTemplate;
-
-
-    public ThumbServiceImpl(ThumbMapper thumbMapper,
-                            BlogMapper blogMapper,
-                            UserService userService,
-                            TransactionTemplate transactionTemplate,
-                            RedissonClient redissonClient,
-                            RedisTemplate<String, Object> redisTemplate) {
-        this.baseMapper = thumbMapper;
-        this.blogMapper = blogMapper;
-        this.userService = userService;
-        this.transactionTemplate = transactionTemplate;
-        this.redissonClient = redissonClient;
-        this.redisTemplate = redisTemplate;
-    }
 
     @Override
     public Boolean doThumb(DoThumbRequest doThumbRequest, HttpServletRequest request) {
@@ -141,7 +131,7 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
     }
 
     private Boolean executeWithLock(Long userId, Long blogId, Supplier<Boolean> operation) {
-        RLock lock = redissonClient.getLock(getThumbLockKey(userId, blogId));
+        RLock lock = redissonClient.getLock(RedisKeyUtil.getThumbLockKey(userId, blogId));
         if (!lock.tryLock()) {
             throw new BusinessException(ErrorCode.TOO_MANY_REQUEST, "操作频繁");
         }
@@ -184,7 +174,7 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
     }
 
     private Long getCachedThumbId(Long userId, Long blogId) {
-        Object value = redisTemplate.opsForHash().get(getUserThumbKey(userId), blogId.toString());
+        Object value = redisTemplate.opsForHash().get(RedisKeyUtil.getUserThumbKey(userId), blogId.toString());
         if (value == null) {
             return null;
         }
@@ -198,22 +188,15 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, Thumb> implements
         if (thumbId == null) {
             return;
         }
-        String userThumbKey = getUserThumbKey(userId);
+        String userThumbKey = RedisKeyUtil.getUserThumbKey(userId);
         redisTemplate.opsForHash().put(userThumbKey, blogId.toString(), thumbId);
         redisTemplate.expire(userThumbKey, Duration.ofDays(ThumbConstant.USER_THUMB_CACHE_TTL_DAYS));
     }
 
     private void deleteThumbCache(Long userId, Long blogId) {
-        redisTemplate.opsForHash().delete(getUserThumbKey(userId), blogId.toString());
+        redisTemplate.opsForHash().delete(RedisKeyUtil.getUserThumbKey(userId), blogId.toString());
     }
 
-    private String getUserThumbKey(Long userId) {
-        return ThumbConstant.USER_THUMB_KEY_PREFIX + userId;
-    }
-
-    private String getThumbLockKey(Long userId, Long blogId) {
-        return ThumbConstant.USER_THUMB_LOCK_KEY_PREFIX + userId + ":" + blogId;
-    }
 
     private record ThumbResult(Long thumbId) {
     }
