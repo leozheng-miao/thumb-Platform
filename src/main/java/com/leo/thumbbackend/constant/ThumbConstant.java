@@ -14,4 +14,6 @@ public interface ThumbConstant {
 
     String BLOG_EXISTS_INIT_KEY_PREFIX = "blog:exists:init:%s";
 
+    Long UN_THUMB_CONSTANT = 0L;
+
 }

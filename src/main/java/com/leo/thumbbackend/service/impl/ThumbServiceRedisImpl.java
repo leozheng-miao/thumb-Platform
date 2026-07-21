@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.leo.thumbbackend.constant.RedisLuaScriptConstant;
 import com.leo.thumbbackend.exception.BusinessException;
 import com.leo.thumbbackend.exception.ErrorCode;
+import com.leo.thumbbackend.manager.cache.CacheManager;
 import com.leo.thumbbackend.mapper.ThumbMapper;
 import com.leo.thumbbackend.model.dto.thumb.DoThumbRequest;
 import com.leo.thumbbackend.model.entity.Thumb;
@@ -29,16 +30,19 @@ public class ThumbServiceRedisImpl extends ServiceImpl<ThumbMapper, Thumb> imple
 
     private final UserService userService;
     private final StringRedisTemplate stringRedisTemplate;
+    private final CacheManager cacheManager;
 
     @Override
     public Boolean doThumb(DoThumbRequest doThumbRequest, HttpServletRequest request) {
         Long blogId = validateAndGetBlogId(doThumbRequest);
         User loginUser = getLoginUser(request);
+        String userThumbKey = RedisKeyUtil.getUserThumbKey(loginUser.getId());
+        String blogIdKey = blogId.toString();
         Long result = stringRedisTemplate.execute(
                 RedisLuaScriptConstant.THUMB_SCRIPT,
-                List.of(getTempThumbKey(), RedisKeyUtil.getUserThumbKey(loginUser.getId()), RedisKeyUtil.getBlogExistsKey()),
+                List.of(getTempThumbKey(), userThumbKey, RedisKeyUtil.getBlogExistsKey()),
                 loginUser.getId().toString(),
-                blogId.toString()
+                blogIdKey
         );
         long luaResult = getLuaResult(result);
         if (LuaStatusEnum.BLOG_NOT_EXIST.getValue() == luaResult) {
@@ -47,18 +51,24 @@ public class ThumbServiceRedisImpl extends ServiceImpl<ThumbMapper, Thumb> imple
         if (LuaStatusEnum.FAIL.getValue() == luaResult) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户已点赞");
         }
-        return LuaStatusEnum.SUCCESS.getValue() == luaResult;
+        boolean success = LuaStatusEnum.SUCCESS.getValue() == luaResult;
+        if (success) {
+            cacheManager.putIfPresent(userThumbKey, blogIdKey, "1");
+        }
+        return success;
     }
 
     @Override
     public Boolean undoThumb(DoThumbRequest doThumbRequest, HttpServletRequest request) {
         Long blogId = validateAndGetBlogId(doThumbRequest);
         User loginUser = getLoginUser(request);
+        String userThumbKey = RedisKeyUtil.getUserThumbKey(loginUser.getId());
+        String blogIdKey = blogId.toString();
         Long result = stringRedisTemplate.execute(
                 RedisLuaScriptConstant.UNTHUMB_SCRIPT,
-                List.of(getTempThumbKey(), RedisKeyUtil.getUserThumbKey(loginUser.getId()), RedisKeyUtil.getBlogExistsKey()),
+                List.of(getTempThumbKey(), userThumbKey, RedisKeyUtil.getBlogExistsKey()),
                 loginUser.getId().toString(),
-                blogId.toString()
+                blogIdKey
         );
         long luaResult = getLuaResult(result);
         if (LuaStatusEnum.BLOG_NOT_EXIST.getValue() == luaResult) {
@@ -67,7 +77,11 @@ public class ThumbServiceRedisImpl extends ServiceImpl<ThumbMapper, Thumb> imple
         if (LuaStatusEnum.FAIL.getValue() == luaResult) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户未点赞");
         }
-        return LuaStatusEnum.SUCCESS.getValue() == luaResult;
+        boolean success = LuaStatusEnum.SUCCESS.getValue() == luaResult;
+        if (success) {
+            cacheManager.delete(userThumbKey, blogIdKey);
+        }
+        return success;
     }
 
     @Override
@@ -75,8 +89,7 @@ public class ThumbServiceRedisImpl extends ServiceImpl<ThumbMapper, Thumb> imple
         if (blogId == null || userId == null || blogId <= 0 || userId <= 0) {
             return false;
         }
-        return Boolean.TRUE.equals(stringRedisTemplate.opsForHash()
-                .hasKey(RedisKeyUtil.getUserThumbKey(userId), blogId.toString()));
+        return cacheManager.get(RedisKeyUtil.getUserThumbKey(userId), blogId.toString()) != null;
     }
 
     private Long validateAndGetBlogId(DoThumbRequest doThumbRequest) {

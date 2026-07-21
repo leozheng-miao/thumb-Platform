@@ -3,6 +3,7 @@ package com.leo.thumbbackend.service.impl;
 import com.leo.thumbbackend.constant.RedisLuaScriptConstant;
 import com.leo.thumbbackend.exception.BusinessException;
 import com.leo.thumbbackend.exception.ErrorCode;
+import com.leo.thumbbackend.manager.cache.CacheManager;
 import com.leo.thumbbackend.model.dto.thumb.DoThumbRequest;
 import com.leo.thumbbackend.model.entity.User;
 import com.leo.thumbbackend.model.enums.LuaStatusEnum;
@@ -16,6 +17,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -28,6 +30,7 @@ class ThumbServiceRedisImplTest {
 
     private UserService userService;
     private StringRedisTemplate stringRedisTemplate;
+    private CacheManager cacheManager;
     private HttpServletRequest request;
     private ThumbServiceRedisImpl thumbService;
 
@@ -35,8 +38,9 @@ class ThumbServiceRedisImplTest {
     void setUp() {
         userService = mock(UserService.class);
         stringRedisTemplate = mock(StringRedisTemplate.class);
+        cacheManager = mock(CacheManager.class);
         request = mock(HttpServletRequest.class);
-        thumbService = new ThumbServiceRedisImpl(userService, stringRedisTemplate);
+        thumbService = new ThumbServiceRedisImpl(userService, stringRedisTemplate, cacheManager);
 
         User user = new User();
         user.setId(1L);
@@ -71,6 +75,7 @@ class ThumbServiceRedisImplTest {
         )).thenReturn(LuaStatusEnum.SUCCESS.getValue());
 
         assertTrue(thumbService.doThumb(request(2L), request));
+        verify(cacheManager).putIfPresent("thumb:1", "2", "1");
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<String>> keysCaptor = ArgumentCaptor.forClass(List.class);
@@ -100,6 +105,34 @@ class ThumbServiceRedisImplTest {
 
         assertEquals(ErrorCode.NOT_FOUND_ERROR.getCode(), exception.getCode());
         assertEquals("博客不存在", exception.getMessage());
+    }
+
+    @Test
+    void undoThumbDeletesLocalHotCacheWhenLuaReturnsSuccess() {
+        when(stringRedisTemplate.execute(
+                eq(RedisLuaScriptConstant.UNTHUMB_SCRIPT),
+                anyList(),
+                eq("1"),
+                eq("2")
+        )).thenReturn(LuaStatusEnum.SUCCESS.getValue());
+
+        assertTrue(thumbService.undoThumb(request(2L), request));
+
+        verify(cacheManager).delete("thumb:1", "2");
+    }
+
+    @Test
+    void hasThumbReturnsTrueWhenCacheManagerHit() {
+        when(cacheManager.get("thumb:1", "2")).thenReturn("1");
+
+        assertTrue(thumbService.hasThumb(2L, 1L));
+    }
+
+    @Test
+    void hasThumbReturnsFalseWhenCacheManagerMiss() {
+        when(cacheManager.get("thumb:1", "2")).thenReturn(null);
+
+        assertFalse(thumbService.hasThumb(2L, 1L));
     }
 
     private DoThumbRequest request(long blogId) {
