@@ -23,7 +23,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
-@Service("thumbService")
+@Service("thumbServiceLocalCache")
 @Slf4j
 @RequiredArgsConstructor
 public class ThumbServiceRedisImpl extends ServiceImpl<ThumbMapper, Thumb> implements ThumbService {

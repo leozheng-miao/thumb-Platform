@@ -6,9 +6,9 @@ spring:
       path: /api
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/thumb_db
+    url: jdbc:mysql://localhost:4000/thumb_db
     username: root
-    password: clx740329
+    password:
   data:
     redis:
       host: ${REDIS_HOST:localhost}
